@@ -1,4 +1,3 @@
-from django.core.mail import send_mail
 from rest_framework.renderers import JSONRenderer
 from django.utils import timezone
 from django.conf import settings
@@ -15,13 +14,17 @@ from django.contrib.sessions.models import Session
 from django.contrib.auth.password_validation import validate_password
 from rest_framework.generics import UpdateAPIView, RetrieveAPIView
 from .serializers import ProfileSerializer
-from django.views.decorators.csrf import ensure_csrf_cookie
 from django.http import JsonResponse
+from django.middleware.csrf import get_token
 from django.core.exceptions import ValidationError
 from django.contrib.auth.hashers import check_password
+from .mail import EmailDeliveryError, recovery_message, send_account_email, verification_message
 
 
 import secrets
+
+def verification_queryset():
+    return EmailVerificationToken.objects.filter(passwordresettoken__isnull=True)
 
 def logout_all_sessions(user):
     sessions = Session.objects.all()
@@ -33,22 +36,26 @@ def logout_all_sessions(user):
             session.delete()
 
 
+def frontend_link(path):
+    base = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return base + path
+
 def send_verification_email(user, token):
-    verification_url = "http://localhost:8000/auth/verify-email/" + token + "/"
-    send_mail(
-        subject="Verify your email",
-        message="Click this link to verify your email: " + verification_url,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
+    text, html = verification_message(frontend_link(f"/verify-email/{token}"))
+    send_account_email(
+        subject="Verify your PrepLoop email",
+        recipient=user.email,
+        text=text,
+        html=html,
     )
-    
-def send_password_recovery_email(user,token):
-    change_password_url = "http://localhost:8000/auth/change-password/" + token + "/"
-    send_mail(
-        subject="Change your password",
-        message="Click this link to change your password: " + change_password_url,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
+
+def send_password_recovery_email(user, token):
+    text, html = recovery_message(frontend_link(f"/reset-password/{token}"))
+    send_account_email(
+        subject="Reset your PrepLoop password",
+        recipient=user.email,
+        text=text,
+        html=html,
     )
 
 class RegisterView(CreateAPIView):
@@ -63,8 +70,24 @@ class RegisterView(CreateAPIView):
             user=user,
             token=token
         )
-        
-        send_verification_email(user, token)
+
+        self.email_sent = True
+        self.email_error = ""
+        try:
+            send_verification_email(user, token)
+        except EmailDeliveryError as exc:
+            self.email_sent = False
+            self.email_error = str(exc)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        payload = dict(serializer.data)
+        payload["email_sent"] = self.email_sent
+        if not self.email_sent:
+            payload["email_error"] = self.email_error
+        return Response(payload, status=status.HTTP_201_CREATED, headers=self.get_success_headers(serializer.data))
         
 class LoginView(APIView):
     
@@ -116,18 +139,15 @@ class CurrentUserView(RetrieveAPIView):
     def get_object(self):
         return self.request.user
 
-@ensure_csrf_cookie
 def get_csrf_token(request):
-    return JsonResponse({"detail": "CSRF cookie set"})
+    return JsonResponse({"csrfToken": get_token(request)})
         
 
 class EmailVerificationView(APIView):
     renderer_classes = [JSONRenderer]
 
     def get(self, request, token):
-        verification_token = EmailVerificationToken.objects.filter(
-            token=token
-        ).first()
+        verification_token = verification_queryset().filter(token=token).first()
 
         current_time = timezone.now()
 
@@ -168,12 +188,15 @@ class ResendVerificationEmail(APIView):
         if user.account_status == User.AccountStatus.ACTIVE:
             return Response({"message": "Your email is already verified"})
 
-        EmailVerificationToken.objects.filter(user=user).delete()
+        verification_queryset().filter(user=user).delete()
 
         token = secrets.token_urlsafe(32)
         EmailVerificationToken.objects.create(user=user, token=token)
 
-        send_verification_email(user, token)
+        try:
+            send_verification_email(user, token)
+        except EmailDeliveryError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         return Response({"message": "Verification email sent"})
 
@@ -218,7 +241,10 @@ class PasswordRecoveryLink(APIView):
             token=token
         )
 
-        send_password_recovery_email(user, token)
+        try:
+            send_password_recovery_email(user, token)
+        except EmailDeliveryError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         return Response(
             {

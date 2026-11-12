@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CommentCreateView, CommentDetailView, SolutionCreateView, SolutionDetailView, ReportListCreateView, ReportDetailView, QuestionCommentListView
+from .views import CommentCreateView, CommentDetailView, SolutionCreateView, SolutionDetailView, ReportListCreateView, ReportDetailView, QuestionCommentListView, SolutionCommentListView
 
 urlpatterns = [
     path("questions/<int:id>/solutions/", SolutionCreateView.as_view(), name="create-solution"),
@@ -9,4 +9,5 @@ urlpatterns = [
     path("reports/", ReportListCreateView.as_view(), name="report-list-create"),
     path("reports/<int:id>/", ReportDetailView.as_view(), name="report-detail"),
     path("questions/<int:id>/comments/", QuestionCommentListView.as_view(), name="question-comments"),
+    path("solutions/<int:id>/comments/", SolutionCommentListView.as_view(), name="solution-comments"),
 ]

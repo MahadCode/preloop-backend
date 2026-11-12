@@ -22,12 +22,13 @@ class QuestionSerializer(serializers.ModelSerializer):
             "description",
             "status",
             "is_deleted",
+            "created_at",
             "company_full",
             "job_role_full",
             "tag_full"
         ]
         
-        read_only_fields = ["id", "status", "is_deleted"]
+        read_only_fields = ["id", "status", "is_deleted", "created_at"]
         
 class UserQuestionStatusSerializer(serializers.ModelSerializer):
     question = QuestionSerializer(read_only=True)

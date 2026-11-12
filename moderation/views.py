@@ -9,6 +9,8 @@ from .permissions import IsModeratorOrAdmin
 from discussions.models import Report
 from questions.models import Question
 from questions.serializers import QuestionSerializer
+from notifications.models import Notification
+from notifications.services import notify
 
 class ModerationReportListView(APIView):
 
@@ -55,6 +57,7 @@ class ModerationReportDetailView(APIView):
                 question.description = data["description"]
 
             question.save()
+            notify_moderated(question.author, moderator, "question", question.id)
 
         elif report.solution:
             solution = report.solution
@@ -63,6 +66,7 @@ class ModerationReportDetailView(APIView):
                 solution.content = data["content"]
 
             solution.save()
+            notify_moderated(solution.author, moderator, "solution", solution.id)
 
         elif report.comment:
             comment = report.comment
@@ -71,6 +75,7 @@ class ModerationReportDetailView(APIView):
                 comment.content = data["content"]
 
             comment.save()
+            notify_moderated(comment.author, moderator, "comment", comment.id)
 
         report.status = Report.Status.ACTIONED
         report.reviewed_by = moderator
@@ -89,10 +94,19 @@ class ModerationReportDetailView(APIView):
             question = report.question
             question.status = Question.QuestionStatus.REMOVED
             question.save(update_fields=["status"])
+            notify_moderated(question.author, moderator, "question", question.id)
         elif report.solution:
-            report.solution.delete()
+            solution = report.solution
+            author = solution.author
+            solution_id = solution.id
+            solution.delete()
+            notify_moderated(author, moderator, "solution", solution_id)
         elif report.comment:
-            report.comment.delete()
+            comment = report.comment
+            author = comment.author
+            comment_id = comment.id
+            comment.delete()
+            notify_moderated(author, moderator, "comment", comment_id)
 
         report.status = Report.Status.ACTIONED
         report.reviewed_by = moderator
@@ -158,5 +172,12 @@ class QuestionModerationDetailView(APIView):
             question.status = Question.QuestionStatus.REMOVED
 
         question.save(update_fields=["status"])
+        notify_moderated(question.author, request.user, "question", question.id)
 
         return Response(QuestionSerializer(question).data, status=status.HTTP_200_OK)
+
+
+def notify_moderated(author, moderator, reference_type, reference_id):
+    if author is None or author.id == moderator.id:
+        return
+    notify(author, Notification.NotificationType.CONTENT_MODERATED, reference_type, reference_id)

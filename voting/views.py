@@ -63,12 +63,18 @@ class QuestionVoteDetailView(APIView):
         ).count()
 
         score = upvotes - downvotes
+        user_vote = None
+        if request.user.is_authenticated:
+            vote = Vote.objects.filter(question=question, user=request.user).first()
+            if vote:
+                user_vote = vote.vote_type
 
         return Response({
             "question_id": question.id,
             "upvotes": upvotes,
             "downvotes": downvotes,
-            "score": score
+            "score": score,
+            "user_vote": user_vote,
         })
     
     

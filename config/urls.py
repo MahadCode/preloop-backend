@@ -26,5 +26,6 @@ urlpatterns = [
     path("progress/", include("progress.urls")),
     path("moderation/", include("moderation.urls")),
     path("taxonomy/", include("taxonomy.urls")),
+    path("notifications/", include("notifications.urls")),
     path("", include("voting.urls")),
 ]

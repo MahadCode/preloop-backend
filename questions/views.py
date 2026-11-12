@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from accounts.permissions import IsVerifiedUser
+from notifications.services import notify_goals_after_solve
 
 # Create your views here.
 class QuestionCreateView(APIView):
@@ -34,7 +35,8 @@ class QuestionDetailView(APIView):
     
     def get(self, request, id):
         question = get_object_or_404(Question, id=id, is_deleted=False)
-        if question.status == Question.QuestionStatus.PUBLISHED:
+        is_author = question.author_id == request.user.id
+        if question.status == Question.QuestionStatus.PUBLISHED or is_author:
             serializer = QuestionSerializer(question)
             return Response(serializer.data)
         return Response({"message": "Question hasn't been published yet"}, status=status.HTTP_404_NOT_FOUND)
@@ -90,19 +92,23 @@ class QuestionStatusDetailView(APIView):
         
     def post(self, request, id):
         question = get_object_or_404(Question, id=id, is_deleted = False)
+        previous = UserQuestionStatus.objects.filter(user=request.user, question=question).values_list("status", flat=True).first()
         
         serializer = UserQuestionStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(user = request.user, question = question)
+        saved = serializer.save(user = request.user, question = question)
+        record_goal_progress(request.user, question, previous, saved.status)
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
     def patch(self, request, id):
         question = get_object_or_404(Question, id=id, is_deleted = False)
         question_status = get_object_or_404(UserQuestionStatus, question=question, user=request.user)
+        previous = question_status.status
         serializer = UserQuestionStatusSerializer(question_status, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        saved = serializer.save()
+        record_goal_progress(request.user, question, previous, saved.status)
         return Response(serializer.data)
     
     def delete(self, request, id):
@@ -125,6 +131,45 @@ class UserQuestionStatusListView(APIView):
         
         serializer = UserQuestionStatusSerializer(question_status, many=True)
         return Response(serializer.data)
+
+
+class MyQuestionListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        questions = Question.objects.filter(author=request.user, is_deleted=False).order_by("-created_at")
+        return Response(QuestionSerializer(questions, many=True).data)
+
+
+class QuestionStatusBulkView(APIView):
+    permission_classes = [IsVerifiedUser]
+
+    def get(self, request):
+        published = Question.objects.filter(
+            is_deleted=False,
+            status=Question.QuestionStatus.PUBLISHED,
+        )
+        existing = {
+            row.question_id: row
+            for row in UserQuestionStatus.objects.filter(user=request.user, question__in=published)
+        }
+        payload = []
+        for question in published:
+            row = existing.get(question.id)
+            payload.append({
+                "question_id": question.id,
+                "status": row.status if row else UserQuestionStatus.StatusChoices.UNSOLVED,
+                "id": row.id if row else None,
+            })
+        return Response(payload)
+
+
+def record_goal_progress(user, question, previous, current):
+    if current != UserQuestionStatus.StatusChoices.SOLVED or previous == current:
+        return
+    if question.status != Question.QuestionStatus.PUBLISHED or question.is_deleted:
+        return
+    notify_goals_after_solve(user, question)
         
         
     

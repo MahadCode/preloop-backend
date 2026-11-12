@@ -11,6 +11,8 @@ from django.shortcuts import get_object_or_404
 from .models import Solution, Comment, Report
 from questions.models import Question
 from accounts.permissions import IsVerifiedUser
+from notifications.models import Notification
+from notifications.services import notify
 
 
 class SolutionCreateView(APIView):
@@ -28,7 +30,14 @@ class SolutionCreateView(APIView):
         serializer = SolutionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         question = get_object_or_404(Question, id=id)
-        serializer.save(author=request.user, question=question)
+        solution = serializer.save(author=request.user, question=question)
+        if question.author_id and question.author_id != request.user.id:
+            notify(
+                question.author,
+                Notification.NotificationType.NEW_SOLUTION,
+                "solution",
+                solution.id,
+            )
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -68,7 +77,10 @@ class CommentCreateView(APIView):
     def post(self, request):
         serializer = CommentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(author=request.user)
+        comment = serializer.save(author=request.user)
+        recipient = comment_recipient(comment, request.user.id)
+        if recipient is not None:
+            notify(recipient, Notification.NotificationType.NEW_REPLY, "comment", comment.id)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -152,4 +164,24 @@ class QuestionCommentListView(APIView):
         comments = Comment.objects.filter(question=question)
         serializer = QuestionCommentSerializer(comments, many=True)
         return Response(serializer.data)
+
+
+class SolutionCommentListView(APIView):
+    permission_classes = [IsVerifiedUser]
+
+    def get(self, request, id):
+        solution = get_object_or_404(Solution, id=id)
+        comments = Comment.objects.filter(solution=solution)
+        serializer = QuestionCommentSerializer(comments, many=True)
+        return Response(serializer.data)
+
+
+def comment_recipient(comment, actor_id):
+    if comment.reply_to_id and comment.reply_to.author_id and comment.reply_to.author_id != actor_id:
+        return comment.reply_to.author
+    if comment.question_id and comment.question.author_id and comment.question.author_id != actor_id:
+        return comment.question.author
+    if comment.solution_id and comment.solution.author_id and comment.solution.author_id != actor_id:
+        return comment.solution.author
+    return None
         
